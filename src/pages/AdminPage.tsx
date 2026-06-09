@@ -32,6 +32,11 @@ import {
   Phone,
   Users as UsersIcon,
   DollarSign,
+  Download,
+  CheckSquare,
+  Square,
+  FileText,
+  Info,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useAdminStore } from '../store/useAdminStore';
@@ -40,15 +45,15 @@ import { useUserStore } from '../store/useUserStore';
 import { cn } from '../lib/utils';
 import { format, addDays } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import type { SportType, Order } from '../types';
+import type { SportType, Order, OrderStatus } from '../types';
 
 type TabType = 'overview' | 'venues' | 'competitions' | 'notices' | 'verification' | 'orders' | 'settings' | 'noshow';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const { settings, setDailyBookingLimit, statistics, notices, addNotice, deleteNotice } = useAdminStore();
-  const { venues, setMaintenance, selectedDate, setSelectedDate, getTimeSlotsByVenue, getTimeSlotsByVenueAndDate, setCompetitionBySlots, cancelCompetition, getAllCompetitions, getCompetitionById, updateCompetition, cancelCompetitionById } = useBookingStore();
-  const { orders, markAsNoShow, markAsVerified } = useUserStore();
+  const { venues, setMaintenance, selectedDate, setSelectedDate, getTimeSlotsByVenue, getTimeSlotsByVenueAndDate, setCompetitionBySlots, cancelCompetition, getAllCompetitions, getCompetitionById, updateCompetition, cancelCompetitionById, moveCompetition } = useBookingStore();
+  const { orders, markAsNoShow, markAsVerified, batchMarkAsVerified, batchMarkAsNoShow, getVerifiedOrdersByTime } = useUserStore();
 
   const [newNoticeTitle, setNewNoticeTitle] = useState('');
   const [newNoticeContent, setNewNoticeContent] = useState('');
@@ -66,7 +71,10 @@ export default function AdminPage() {
   
   const [orderDateFilter, setOrderDateFilter] = useState('');
   const [orderSportFilter, setOrderSportFilter] = useState<SportType | 'all'>('all');
+  const [orderStatusFilter, setOrderStatusFilter] = useState<OrderStatus | 'all'>('all');
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [viewingCompetitionId, setViewingCompetitionId] = useState<string | null>(null);
 
   const tabs: { value: TabType; label: string; icon: React.ElementType }[] = [
     { value: 'overview', label: '数据概览', icon: BarChart3 },
@@ -86,6 +94,7 @@ export default function AdminPage() {
   const filteredOrders = orders.filter((o) => {
     if (orderDateFilter && o.date !== orderDateFilter) return false;
     if (orderSportFilter !== 'all' && o.sportType !== orderSportFilter) return false;
+    if (orderStatusFilter !== 'all' && o.status !== orderStatusFilter) return false;
     return true;
   }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
@@ -94,6 +103,17 @@ export default function AdminPage() {
     completed: filteredOrders.filter(o => o.status === 'completed').length,
     cancelled: filteredOrders.filter(o => o.status === 'cancelled').length,
     noShow: filteredOrders.filter(o => o.status === 'no_show').length,
+  };
+
+  const revenueStats = {
+    totalRevenue: filteredOrders.filter(o => o.status !== 'cancelled').reduce((sum, o) => sum + o.price, 0),
+    freeOrders: filteredOrders.filter(o => o.price === 0 && o.status !== 'cancelled').length,
+    paidOrders: filteredOrders.filter(o => o.price > 0 && o.status !== 'cancelled').length,
+    verificationRate: (() => {
+      const total = filteredOrders.filter(o => o.status !== 'cancelled').length;
+      const verified = filteredOrders.filter(o => o.status === 'completed').length;
+      return total > 0 ? Math.round((verified / total) * 100) : 0;
+    })(),
   };
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
@@ -110,6 +130,8 @@ export default function AdminPage() {
   });
 
   const todayCompletedOrders = completedOrders.filter(o => o.date === todayStr);
+
+  const recentVerifiedOrders = getVerifiedOrdersByTime().slice(0, 10);
 
   const handleVerifySearch = () => {
     if (!verifySearch.trim()) {
@@ -239,8 +261,26 @@ export default function AdminPage() {
     if (editingCompetitionId) {
       const oldComp = getCompetitionById(editingCompetitionId);
       if (oldComp) {
-        updateCompetition(compVenueId, compDate, oldComp.slotIds, selectedSlotIds, compName, editingCompetitionId);
-        competitionId = editingCompetitionId;
+        if (oldComp.venueId === compVenueId && oldComp.date === compDate) {
+          updateCompetition(compVenueId, compDate, oldComp.slotIds, selectedSlotIds, compName, editingCompetitionId);
+          competitionId = editingCompetitionId;
+        } else {
+          const success = moveCompetition(
+            editingCompetitionId,
+            oldComp.venueId,
+            oldComp.date,
+            oldComp.slotIds,
+            compVenueId,
+            compDate,
+            selectedSlotIds,
+            compName
+          );
+          if (!success) {
+            alert('新的场地或日期时段不可用（已被预约或其他赛事占用），无法迁移赛事。');
+            return;
+          }
+          competitionId = editingCompetitionId;
+        }
         
         const oldNotice = notices.find(n => n.competitionId === editingCompetitionId);
         if (oldNotice) {
@@ -302,6 +342,94 @@ export default function AdminPage() {
     if (editingCompetitionId === competitionId) {
       handleCancelEdit();
     }
+    
+    if (viewingCompetitionId === competitionId) {
+      setViewingCompetitionId(null);
+    }
+  };
+
+  const handleViewCompetition = (competitionId: string) => {
+    setViewingCompetitionId(competitionId);
+  };
+
+  const handleCloseView = () => {
+    setViewingCompetitionId(null);
+  };
+
+  const handleExportCSV = () => {
+    const headers = ['订单号', '联系人', '联系电话', '运动项目', '场地名称', '预约日期', '开始时间', '结束时间', '人数', '费用', '订单状态', '核销状态'];
+    
+    const sportTypeMap: Record<string, string> = {
+      badminton: '羽毛球',
+      tabletennis: '乒乓球',
+      gym: '健身房',
+    };
+    
+    const statusMap: Record<string, string> = {
+      pending: '待使用',
+      completed: '已到场',
+      cancelled: '已取消',
+      no_show: '爽约',
+    };
+    
+    const rows = filteredOrders.map(order => [
+      order.orderNo,
+      order.contactName,
+      order.contactPhone,
+      sportTypeMap[order.sportType] || order.sportType,
+      order.venueName,
+      order.date,
+      order.startTime,
+      order.endTime,
+      order.peopleCount,
+      order.price === 0 ? '免费' : `¥${order.price}`,
+      statusMap[order.status] || order.status,
+      order.isVerified ? '已核销' : '未核销',
+    ]);
+    
+    const csvContent = [headers.join(','), ...rows.map(row => row.map(cell => `"${cell}"`).join(','))].join('\n');
+    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `订单台账_${format(new Date(), 'yyyyMMdd')}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleToggleOrderSelect = (orderId: string) => {
+    setSelectedOrderIds(prev => 
+      prev.includes(orderId) 
+        ? prev.filter(id => id !== orderId)
+        : [...prev, orderId]
+    );
+  };
+
+  const handleSelectAllPending = () => {
+    const pendingOrderIds = filteredOrders.filter(o => o.status === 'pending').map(o => o.id);
+    const allSelected = pendingOrderIds.every(id => selectedOrderIds.includes(id));
+    
+    if (allSelected) {
+      setSelectedOrderIds(prev => prev.filter(id => !pendingOrderIds.includes(id)));
+    } else {
+      setSelectedOrderIds(prev => [...new Set([...prev, ...pendingOrderIds])]);
+    }
+  };
+
+  const handleBatchVerify = () => {
+    if (selectedOrderIds.length === 0) return;
+    if (!confirm(`确定要将选中的 ${selectedOrderIds.length} 条订单标记为已到场吗？`)) return;
+    
+    batchMarkAsVerified(selectedOrderIds);
+    setSelectedOrderIds([]);
+  };
+
+  const handleBatchNoShow = () => {
+    if (selectedOrderIds.length === 0) return;
+    if (!confirm(`确定要将选中的 ${selectedOrderIds.length} 条订单标记为爽约吗？`)) return;
+    
+    batchMarkAsNoShow(selectedOrderIds);
+    setSelectedOrderIds([]);
   };
 
   return (
@@ -686,9 +814,14 @@ export default function AdminPage() {
                 ) : (
                   <div className="space-y-3">
                     {getAllCompetitions().map((comp) => (
-                      <div key={comp.id} className="bg-white rounded-xl p-4 border border-slate-100 hover:border-blue-200 transition-all">
+                      <div key={comp.id} className={cn(
+                        "bg-white rounded-xl p-4 border transition-all",
+                        viewingCompetitionId === comp.id 
+                          ? "border-blue-400 ring-2 ring-blue-100" 
+                          : "border-slate-100 hover:border-blue-200"
+                      )}>
                         <div className="flex items-start justify-between">
-                          <div className="flex-1">
+                          <div className="flex-1 cursor-pointer" onClick={() => handleViewCompetition(comp.id)}>
                             <div className="flex items-center gap-2 mb-2">
                               <Trophy className="w-4 h-4 text-blue-500" />
                               <span className="font-medium text-slate-800">{comp.name}</span>
@@ -711,7 +844,14 @@ export default function AdminPage() {
                               </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 ml-4">
+                          <div className="flex items-center gap-1 ml-4">
+                            <button
+                              onClick={() => handleViewCompetition(comp.id)}
+                              className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
+                              title="查看详情"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
                             <button
                               onClick={() => handleEditCompetition(comp.id)}
                               className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
@@ -728,6 +868,71 @@ export default function AdminPage() {
                             </button>
                           </div>
                         </div>
+                        
+                        {viewingCompetitionId === comp.id && (
+                          <div className="mt-4 pt-4 border-t border-slate-100">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="bg-blue-50 rounded-lg p-4">
+                                <h5 className="font-medium text-blue-800 mb-2 flex items-center gap-1.5">
+                                  <Clock className="w-4 h-4" />
+                                  占用时段
+                                </h5>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {(() => {
+                                    const slots = compSlots.filter(s => s.competitionId === comp.id);
+                                    return slots.length > 0 
+                                      ? slots.map(slot => (
+                                          <span key={slot.id} className="text-xs px-2 py-1 bg-white text-blue-700 rounded border border-blue-200">
+                                            {slot.startTime}-{slot.endTime}
+                                          </span>
+                                        ))
+                                      : comp.slotIds.length > 0 
+                                        ? (() => {
+                                            const timeStr = comp.timeRanges.split('、');
+                                            return timeStr.map((t, i) => (
+                                              <span key={i} className="text-xs px-2 py-1 bg-white text-blue-700 rounded border border-blue-200">
+                                                {t}
+                                              </span>
+                                            ));
+                                          })()
+                                        : null;
+                                  })()}
+                                </div>
+                                <p className="text-xs text-blue-600/70 mt-2">
+                                  共 {comp.slotIds.length} 个时段
+                                </p>
+                              </div>
+                              
+                              <div className="bg-amber-50 rounded-lg p-4">
+                                <h5 className="font-medium text-amber-800 mb-2 flex items-center gap-1.5">
+                                  <FileText className="w-4 h-4" />
+                                  赛事公告
+                                </h5>
+                                {(() => {
+                                  const notice = notices.find(n => n.competitionId === comp.id);
+                                  return notice ? (
+                                    <div>
+                                      <p className="text-sm font-medium text-amber-800 mb-1">{notice.title}</p>
+                                      <p className="text-xs text-amber-700/80">{notice.content}</p>
+                                      <p className="text-xs text-amber-600/60 mt-2">{notice.date}</p>
+                                    </div>
+                                  ) : (
+                                    <p className="text-sm text-amber-600/60">暂无关联公告</p>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                            
+                            <div className="mt-3 flex justify-end">
+                              <button
+                                onClick={handleCloseView}
+                                className="text-xs text-slate-500 hover:text-slate-700"
+                              >
+                                收起详情
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -856,27 +1061,36 @@ export default function AdminPage() {
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h3 className="font-semibold text-slate-800">订单台账</h3>
-                <div className="text-sm text-slate-500">
-                  共 <span className="font-medium text-slate-700">{filteredOrders.length}</span> 条订单
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-slate-500">
+                    共 <span className="font-medium text-slate-700">{filteredOrders.length}</span> 条订单
+                  </span>
+                  <button
+                    onClick={handleExportCSV}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-600 hover:text-slate-800 border border-slate-200 rounded-lg hover:border-slate-300 transition-all"
+                  >
+                    <Download className="w-4 h-4" />
+                    导出
+                  </button>
                 </div>
               </div>
 
               <div className="bg-white rounded-xl p-4 border border-slate-100">
                 <div className="flex flex-wrap gap-4">
-                  <div className="flex-1 min-w-[200px]">
+                  <div className="flex-1 min-w-[180px]">
                     <label className="block text-sm font-medium text-slate-600 mb-1.5">按日期筛选</label>
                     <input
                       type="date"
                       value={orderDateFilter}
-                      onChange={(e) => setOrderDateFilter(e.target.value)}
+                      onChange={(e) => { setOrderDateFilter(e.target.value); setSelectedOrderIds([]); }}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 text-sm"
                     />
                   </div>
-                  <div className="flex-1 min-w-[200px]">
+                  <div className="flex-1 min-w-[180px]">
                     <label className="block text-sm font-medium text-slate-600 mb-1.5">按项目筛选</label>
                     <select
                       value={orderSportFilter}
-                      onChange={(e) => setOrderSportFilter(e.target.value as SportType | 'all')}
+                      onChange={(e) => { setOrderSportFilter(e.target.value as SportType | 'all'); setSelectedOrderIds([]); }}
                       className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 text-sm bg-white"
                     >
                       <option value="all">全部项目</option>
@@ -885,11 +1099,27 @@ export default function AdminPage() {
                       <option value="gym">健身房</option>
                     </select>
                   </div>
+                  <div className="flex-1 min-w-[180px]">
+                    <label className="block text-sm font-medium text-slate-600 mb-1.5">按状态筛选</label>
+                    <select
+                      value={orderStatusFilter}
+                      onChange={(e) => { setOrderStatusFilter(e.target.value as OrderStatus | 'all'); setSelectedOrderIds([]); }}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 text-sm bg-white"
+                    >
+                      <option value="all">全部状态</option>
+                      <option value="pending">待使用</option>
+                      <option value="completed">已到场</option>
+                      <option value="cancelled">已取消</option>
+                      <option value="no_show">爽约</option>
+                    </select>
+                  </div>
                   <div className="flex items-end">
                     <button
                       onClick={() => {
                         setOrderDateFilter('');
                         setOrderSportFilter('all');
+                        setOrderStatusFilter('all');
+                        setSelectedOrderIds([]);
                       }}
                       className="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg hover:border-slate-300 transition-all"
                     >
@@ -918,7 +1148,79 @@ export default function AdminPage() {
                 </div>
               </div>
 
+              <div className="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-xl p-4 border border-amber-100">
+                <h4 className="font-medium text-amber-800 mb-3 flex items-center gap-2">
+                  <DollarSign className="w-4 h-4" />
+                  运营对账
+                </h4>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-xs text-amber-700/70 mb-1">收入汇总</p>
+                    <p className="text-xl font-bold text-amber-700">¥{revenueStats.totalRevenue}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-amber-700/70 mb-1">免费订单</p>
+                    <p className="text-xl font-bold text-amber-700">{revenueStats.freeOrders} 单</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-amber-700/70 mb-1">付费订单</p>
+                    <p className="text-xl font-bold text-amber-700">{revenueStats.paidOrders} 单</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-amber-700/70 mb-1">核销率</p>
+                    <p className="text-xl font-bold text-amber-700">{revenueStats.verificationRate}%</p>
+                  </div>
+                </div>
+              </div>
+
+              {selectedOrderIds.length > 0 && (
+                <div className="bg-blue-50 rounded-xl p-4 border border-blue-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm text-blue-700">
+                    <CheckSquare className="w-4 h-4" />
+                    <span>已选择 <span className="font-bold">{selectedOrderIds.length}</span> 条订单</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleBatchVerify}
+                      className="px-3 py-1.5 text-sm bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors flex items-center gap-1.5"
+                    >
+                      <CheckCircle className="w-4 h-4" />
+                      批量到场
+                    </button>
+                    <button
+                      onClick={handleBatchNoShow}
+                      className="px-3 py-1.5 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors flex items-center gap-1.5"
+                    >
+                      <UserX className="w-4 h-4" />
+                      批量爽约
+                    </button>
+                    <button
+                      onClick={() => setSelectedOrderIds([])}
+                      className="px-3 py-1.5 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg hover:border-slate-300 transition-all"
+                    >
+                      取消选择
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-medium text-slate-700">订单列表</h4>
+                  {orderStatusFilter === 'all' || orderStatusFilter === 'pending' ? (
+                    <button
+                      onClick={handleSelectAllPending}
+                      className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                      disabled={filteredOrders.filter(o => o.status === 'pending').length === 0}
+                    >
+                      {filteredOrders.filter(o => o.status === 'pending').length > 0 && 
+                       filteredOrders.filter(o => o.status === 'pending').every(o => selectedOrderIds.includes(o.id))
+                        ? '取消全选待使用'
+                        : '全选待使用'}
+                    </button>
+                  ) : null}
+                </div>
+
                 {filteredOrders.length === 0 ? (
                   <div className="bg-white rounded-xl p-8 text-center border border-slate-100">
                     <ClipboardList className="w-12 h-12 text-slate-300 mx-auto mb-3" />
@@ -928,7 +1230,12 @@ export default function AdminPage() {
                   filteredOrders.map((order) => (
                     <div
                       key={order.id}
-                      className="bg-white rounded-xl border border-slate-100 overflow-hidden hover:border-blue-200 transition-all"
+                      className={cn(
+                        "bg-white rounded-xl border overflow-hidden transition-all",
+                        selectedOrderIds.includes(order.id) 
+                          ? "border-blue-400 ring-2 ring-blue-100" 
+                          : "border-slate-100 hover:border-blue-200"
+                      )}
                     >
                       <div
                         className="p-4 cursor-pointer"
@@ -936,6 +1243,25 @@ export default function AdminPage() {
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (order.status === 'pending') {
+                                  handleToggleOrderSelect(order.id);
+                                }
+                              }}
+                              className={cn(
+                                "w-5 h-5 rounded flex items-center justify-center transition-all",
+                                order.status === 'pending'
+                                  ? selectedOrderIds.includes(order.id)
+                                    ? "bg-blue-500 text-white"
+                                    : "border border-slate-300 hover:border-blue-400"
+                                  : "border border-slate-200 cursor-not-allowed opacity-30"
+                              )}
+                              disabled={order.status !== 'pending'}
+                            >
+                              {selectedOrderIds.includes(order.id) && <CheckSquare className="w-4 h-4" />}
+                            </button>
                             <div className={cn(
                               'w-10 h-10 rounded-lg flex items-center justify-center',
                               order.status === 'pending' && 'bg-orange-100',
@@ -1038,15 +1364,26 @@ export default function AdminPage() {
                                 </span>
                               </div>
                               {order.status === 'pending' && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    markAsVerified(order.id);
-                                  }}
-                                  className="text-sm px-4 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-all"
-                                >
-                                  确认入场
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      markAsVerified(order.id);
+                                    }}
+                                    className="text-sm px-4 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-all"
+                                  >
+                                    确认入场
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      markAsNoShow(order.id);
+                                    }}
+                                    className="text-sm px-4 py-1.5 text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-all"
+                                  >
+                                    标记爽约
+                                  </button>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -1066,7 +1403,7 @@ export default function AdminPage() {
                 <div className="text-sm text-slate-500">
                   待核销 <span className="font-medium text-orange-600">{pendingOrders.length}</span> 单
                   <span className="mx-2">·</span>
-                  已核销 <span className="font-medium text-green-600">{todayCompletedOrders.length}</span> 单
+                  已核销 <span className="font-medium text-green-600">{completedOrders.length}</span> 单
                 </div>
               </div>
 
@@ -1191,10 +1528,10 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {todayCompletedOrders.length > 0 && (
+              {recentVerifiedOrders.length > 0 && (
                 <div className="space-y-3">
-                  <h4 className="font-medium text-slate-700">今日已核销</h4>
-                  {todayCompletedOrders.map((order) => (
+                  <h4 className="font-medium text-slate-700">最近已核销</h4>
+                  {recentVerifiedOrders.map((order) => (
                     <div
                       key={order.id}
                       className="bg-green-50 rounded-xl border border-green-100 p-3 flex items-center justify-between"
@@ -1204,7 +1541,7 @@ export default function AdminPage() {
                         <div>
                           <p className="text-sm font-medium text-slate-700">{order.venueName}</p>
                           <p className="text-xs text-slate-500">
-                            {order.contactName} · {order.startTime}-{order.endTime}
+                            {order.contactName} · {order.date} {order.startTime}-{order.endTime}
                           </p>
                         </div>
                       </div>

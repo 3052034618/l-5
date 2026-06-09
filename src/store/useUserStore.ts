@@ -15,8 +15,11 @@ interface UserState {
   getOrderById: (orderId: string) => Order | undefined;
   getOrdersByStatus: (status: OrderStatus) => Order[];
   markAsVerified: (orderId: string) => void;
+  batchMarkAsVerified: (orderIds: string[]) => void;
   markAsNoShow: (orderId: string) => void;
+  batchMarkAsNoShow: (orderIds: string[]) => void;
   getDailyBookingCount: (date: string) => number;
+  getVerifiedOrdersByTime: () => Order[];
 }
 
 const refreshAdminStats = (orders: Order[]) => {
@@ -68,18 +71,40 @@ export const useUserStore = create<UserState>()(
       },
       
       markAsVerified: (orderId) => {
+        const now = new Date().toISOString();
         set((state) => ({
           orders: state.orders.map((order) =>
-            order.id === orderId ? { ...order, isVerified: true, status: 'completed' as const } : order
+            order.id === orderId ? { ...order, isVerified: true, status: 'completed' as const, verifiedAt: now } : order
+          ),
+        }));
+        refreshAdminStats(get().orders);
+      },
+      
+      batchMarkAsVerified: (orderIds) => {
+        const now = new Date().toISOString();
+        set((state) => ({
+          orders: state.orders.map((order) =>
+            orderIds.includes(order.id) ? { ...order, isVerified: true, status: 'completed' as const, verifiedAt: now } : order
           ),
         }));
         refreshAdminStats(get().orders);
       },
       
       markAsNoShow: (orderId) => {
+        const now = new Date().toISOString();
         set((state) => ({
           orders: state.orders.map((order) =>
-            order.id === orderId ? { ...order, status: 'no_show' as const } : order
+            order.id === orderId ? { ...order, status: 'no_show' as const, noShowAt: now } : order
+          ),
+        }));
+        refreshAdminStats(get().orders);
+      },
+      
+      batchMarkAsNoShow: (orderIds) => {
+        const now = new Date().toISOString();
+        set((state) => ({
+          orders: state.orders.map((order) =>
+            orderIds.includes(order.id) ? { ...order, status: 'no_show' as const, noShowAt: now } : order
           ),
         }));
         refreshAdminStats(get().orders);
@@ -90,6 +115,17 @@ export const useUserStore = create<UserState>()(
         return orders.filter(
           (o) => o.date === date && o.status !== 'cancelled' && o.contactName === user.name
         ).length;
+      },
+      
+      getVerifiedOrdersByTime: () => {
+        const { orders } = get();
+        return orders
+          .filter(o => o.status === 'completed')
+          .sort((a, b) => {
+            const timeA = new Date(a.verifiedAt || a.createdAt).getTime();
+            const timeB = new Date(b.verifiedAt || b.createdAt).getTime();
+            return timeB - timeA;
+          });
       },
     }),
     {

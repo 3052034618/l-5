@@ -175,6 +175,7 @@ export const initialOrders: Order[] = [
     status: 'completed',
     createdAt: new Date(Date.now() - 86400000).toISOString(),
     isVerified: true,
+    verifiedAt: new Date(Date.now() - 82800000).toISOString(),
   },
   {
     id: 'order-3',
@@ -192,6 +193,7 @@ export const initialOrders: Order[] = [
     status: 'no_show',
     createdAt: new Date(Date.now() - 172800000).toISOString(),
     isVerified: false,
+    noShowAt: new Date(Date.now() - 169200000).toISOString(),
   },
 ];
 

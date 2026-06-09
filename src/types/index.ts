@@ -43,6 +43,8 @@ export interface Order {
   status: OrderStatus;
   createdAt: string;
   isVerified: boolean;
+  verifiedAt?: string;
+  noShowAt?: string;
 }
 
 export interface Notice {

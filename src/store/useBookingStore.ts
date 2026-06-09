@@ -27,6 +27,7 @@ interface BookingState {
   setCompetitionBySlots: (venueId: string, date: string, slotIds: string[], competitionName: string, competitionId?: string) => string;
   cancelCompetition: (venueId: string, date: string, slotIds: string[]) => void;
   updateCompetition: (venueId: string, date: string, oldSlotIds: string[], newSlotIds: string[], competitionName: string, competitionId: string) => void;
+  moveCompetition: (competitionId: string, oldVenueId: string, oldDate: string, oldSlotIds: string[], newVenueId: string, newDate: string, newSlotIds: string[], competitionName: string) => boolean;
   getAllCompetitions: () => CompetitionInfo[];
   getCompetitionById: (competitionId: string) => CompetitionInfo | undefined;
   cancelCompetitionById: (competitionId: string) => void;
@@ -210,6 +211,38 @@ export const useBookingStore = create<BookingState>()(
             return slot;
           }),
         })),
+
+      moveCompetition: (competitionId, oldVenueId, oldDate, oldSlotIds, newVenueId, newDate, newSlotIds, competitionName) => {
+        const { timeSlots } = get();
+        
+        const newSlots = timeSlots.filter(
+          slot => slot.venueId === newVenueId && slot.date === newDate && newSlotIds.includes(slot.id)
+        );
+        
+        const hasConflict = newSlots.some(slot => 
+          slot.status === 'booked' || 
+          slot.status === 'maintenance' || 
+          (slot.status === 'competition' && slot.competitionId !== competitionId)
+        );
+        
+        if (hasConflict) return false;
+        
+        set((state) => ({
+          timeSlots: state.timeSlots.map((slot) => {
+            if (slot.venueId === oldVenueId && slot.date === oldDate && oldSlotIds.includes(slot.id) && slot.status === 'competition' && slot.competitionId === competitionId) {
+              return { ...slot, status: 'available' as const, competitionName: undefined, competitionId: undefined };
+            }
+            
+            if (slot.venueId === newVenueId && slot.date === newDate && newSlotIds.includes(slot.id) && slot.status === 'available') {
+              return { ...slot, status: 'competition' as const, competitionName, competitionId };
+            }
+            
+            return slot;
+          }),
+        }));
+        
+        return true;
+      },
 
       getAllCompetitions: () => {
         const { timeSlots, venues } = get();
