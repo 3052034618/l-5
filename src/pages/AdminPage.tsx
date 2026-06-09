@@ -95,6 +95,8 @@ export default function AdminPage() {
     ? getTimeSlotsByVenueAndDate(compVenueId, compDate) 
     : [];
 
+  const sortedCompSlots = [...compSlots].sort((a, b) => a.startTime.localeCompare(b.startTime));
+
   const handleToggleSlot = (slotId: string) => {
     setSelectedSlotIds(prev => 
       prev.includes(slotId) 
@@ -103,18 +105,75 @@ export default function AdminPage() {
     );
   };
 
+  const formatSelectedTimeRanges = (): string => {
+    if (selectedSlotIds.length === 0) return '';
+    
+    const selectedSlots = sortedCompSlots.filter(s => selectedSlotIds.includes(s.id));
+    if (selectedSlots.length === 0) return '';
+    
+    if (selectedSlots.length === 1) {
+      return `${selectedSlots[0].startTime}-${selectedSlots[0].endTime}`;
+    }
+    
+    const ranges: string[] = [];
+    let rangeStart = selectedSlots[0].startTime;
+    let prevEnd = selectedSlots[0].endTime;
+    
+    for (let i = 1; i < selectedSlots.length; i++) {
+      const slot = selectedSlots[i];
+      if (slot.startTime === prevEnd) {
+        prevEnd = slot.endTime;
+      } else {
+        ranges.push(`${rangeStart}-${prevEnd}`);
+        rangeStart = slot.startTime;
+        prevEnd = slot.endTime;
+      }
+    }
+    ranges.push(`${rangeStart}-${prevEnd}`);
+    
+    return ranges.join('、');
+  };
+
+  const getSelectedCompetitionName = (): string | null => {
+    const selectedSlots = compSlots.filter(s => selectedSlotIds.includes(s.id));
+    const compSlots2 = selectedSlots.filter(s => s.status === 'competition' && s.competitionName);
+    if (compSlots2.length === 0) return null;
+    return compSlots2[0].competitionName || null;
+  };
+
+  const hasMixedCompetitions = (): boolean => {
+    const selectedSlots = compSlots.filter(s => selectedSlotIds.includes(s.id));
+    const compNames = new Set(selectedSlots.filter(s => s.status === 'competition').map(s => s.competitionName));
+    return compNames.size > 1;
+  };
+
+  const canPublish = (): boolean => {
+    if (!compVenueId || !compName.trim() || selectedSlotIds.length === 0) return false;
+    
+    const selectedSlots = compSlots.filter(s => selectedSlotIds.includes(s.id));
+    const hasBooked = selectedSlots.some(s => s.status === 'booked');
+    const hasMaintenance = selectedSlots.some(s => s.status === 'maintenance');
+    if (hasBooked || hasMaintenance) return false;
+    
+    if (hasMixedCompetitions()) return false;
+    
+    return true;
+  };
+
   const handlePublishCompetition = () => {
-    if (!compVenueId || !compName.trim() || selectedSlotIds.length === 0) return;
+    if (!canPublish()) return;
+    
+    const venue = venues.find(v => v.id === compVenueId);
+    const timeRanges = formatSelectedTimeRanges();
+    const existingCompName = getSelectedCompetitionName();
     
     setCompetitionBySlots(compVenueId, compDate, selectedSlotIds, compName);
     
-    const venue = venues.find(v => v.id === compVenueId);
-    const startTime = compSlots.find(s => s.id === selectedSlotIds[0])?.startTime || '';
-    const endTime = compSlots.find(s => s.id === selectedSlotIds[selectedSlotIds.length - 1])?.endTime || '';
+    const actionWord = existingCompName && existingCompName === compName ? '更新' : '发布';
     
     addNotice({
-      title: compName,
-      content: `${venue?.name || ''}将于${compDate} ${startTime}-${endTime}举办${compName}，该时段暂不开放预约。`,
+      title: `${compName}（${actionWord}）`,
+      content: `${venue?.name || ''}将于${compDate} ${timeRanges}举办${compName}，该时段暂不开放预约。`,
       type: 'competition',
       date: format(new Date(), 'yyyy-MM-dd'),
       isImportant: true,
@@ -443,25 +502,41 @@ export default function AdminPage() {
                     </div>
                     <p className="text-xs text-slate-500 mt-2">
                       已选择 <span className="font-medium text-blue-600">{selectedSlotIds.length}</span> 个时段
-                      <span className="mx-2">·</span>
-                      已订和维护时段不可选
+                      {selectedSlotIds.length > 0 && (
+                        <>
+                          <span className="mx-2">·</span>
+                          <span className="text-slate-600">{formatSelectedTimeRanges()}</span>
+                        </>
+                      )}
                     </p>
+                    {hasMixedCompetitions() && (
+                      <p className="text-xs text-red-500 mt-2 flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" />
+                        选中的时段包含不同赛事，请选择同一赛事的时段
+                      </p>
+                    )}
+                    {getSelectedCompetitionName() && !hasMixedCompetitions() && (
+                      <p className="text-xs text-blue-600 mt-2 flex items-center gap-1">
+                        <Trophy className="w-3 h-3" />
+                        将更新「{getSelectedCompetitionName()}」赛事信息
+                      </p>
+                    )}
                   </div>
                 )}
 
                 <div className="pt-3 border-t border-slate-200">
                   <button
                     onClick={handlePublishCompetition}
-                    disabled={!compVenueId || !compName.trim() || selectedSlotIds.length === 0}
+                    disabled={!canPublish()}
                     className={cn(
                       'w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2',
-                      compVenueId && compName.trim() && selectedSlotIds.length > 0
+                      canPublish()
                         ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 shadow-lg shadow-blue-500/25'
                         : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     )}
                   >
                     <Trophy className="w-5 h-5" />
-                    发布赛事排期
+                    {getSelectedCompetitionName() && !hasMixedCompetitions() ? '更新赛事排期' : '发布赛事排期'}
                   </button>
                 </div>
               </div>

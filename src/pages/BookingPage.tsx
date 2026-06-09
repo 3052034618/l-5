@@ -15,7 +15,7 @@ import {
 import { useBookingStore } from '../store/useBookingStore';
 import { useUserStore } from '../store/useUserStore';
 import { useAdminStore } from '../store/useAdminStore';
-import type { SportType, TimeSlot, Venue } from '../types';
+import type { SportType, TimeSlot, Venue, Order } from '../types';
 import { cn } from '../lib/utils';
 import { format } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
