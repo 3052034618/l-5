@@ -24,6 +24,7 @@ export interface TimeSlot {
   date: string;
   status: VenueStatus;
   competitionName?: string;
+  competitionId?: string;
 }
 
 export interface Order {
@@ -51,6 +52,7 @@ export interface Notice {
   type: 'announcement' | 'competition' | 'rule';
   date: string;
   isImportant: boolean;
+  competitionId?: string;
 }
 
 export interface AdminSettings {
@@ -63,6 +65,19 @@ export interface DailyStats {
   date: string;
   bookings: number;
   checkIns: number;
+}
+
+export interface CompetitionInfo {
+  id: string;
+  name: string;
+  venueId: string;
+  venueName: string;
+  sportType: SportType;
+  date: string;
+  slotIds: string[];
+  startTime: string;
+  endTime: string;
+  timeRanges: string;
 }
 
 export interface Statistics {

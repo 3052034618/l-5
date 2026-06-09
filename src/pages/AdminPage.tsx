@@ -22,6 +22,16 @@ import {
   Dumbbell,
   QrCode,
   Search,
+  Pencil,
+  X,
+  Eye,
+  ClipboardList,
+  ChevronDown,
+  ChevronUp,
+  User,
+  Phone,
+  Users as UsersIcon,
+  DollarSign,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useAdminStore } from '../store/useAdminStore';
@@ -30,14 +40,14 @@ import { useUserStore } from '../store/useUserStore';
 import { cn } from '../lib/utils';
 import { format, addDays } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
-import type { SportType } from '../types';
+import type { SportType, Order } from '../types';
 
-type TabType = 'overview' | 'venues' | 'competitions' | 'notices' | 'verification' | 'settings' | 'noshow';
+type TabType = 'overview' | 'venues' | 'competitions' | 'notices' | 'verification' | 'orders' | 'settings' | 'noshow';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const { settings, setDailyBookingLimit, statistics, notices, addNotice, deleteNotice } = useAdminStore();
-  const { venues, setMaintenance, selectedDate, setSelectedDate, getTimeSlotsByVenue, getTimeSlotsByVenueAndDate, setCompetitionBySlots, cancelCompetition } = useBookingStore();
+  const { venues, setMaintenance, selectedDate, setSelectedDate, getTimeSlotsByVenue, getTimeSlotsByVenueAndDate, setCompetitionBySlots, cancelCompetition, getAllCompetitions, getCompetitionById, updateCompetition, cancelCompetitionById } = useBookingStore();
   const { orders, markAsNoShow, markAsVerified } = useUserStore();
 
   const [newNoticeTitle, setNewNoticeTitle] = useState('');
@@ -50,10 +60,17 @@ export default function AdminPage() {
   const [compDate, setCompDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [compName, setCompName] = useState('');
   const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
+  const [editingCompetitionId, setEditingCompetitionId] = useState<string | null>(null);
   const [verifySearch, setVerifySearch] = useState('');
+  const [searchedOrder, setSearchedOrder] = useState<Order | null>(null);
+  
+  const [orderDateFilter, setOrderDateFilter] = useState('');
+  const [orderSportFilter, setOrderSportFilter] = useState<SportType | 'all'>('all');
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
 
   const tabs: { value: TabType; label: string; icon: React.ElementType }[] = [
     { value: 'overview', label: '数据概览', icon: BarChart3 },
+    { value: 'orders', label: '订单台账', icon: ClipboardList },
     { value: 'venues', label: '场地管理', icon: MapPin },
     { value: 'competitions', label: '赛事排期', icon: Trophy },
     { value: 'notices', label: '公告管理', icon: Bell },
@@ -65,6 +82,57 @@ export default function AdminPage() {
   const pendingOrders = orders.filter((o) => o.status === 'pending');
   const completedOrders = orders.filter((o) => o.status === 'completed');
   const noShowOrders = orders.filter((o) => o.status === 'no_show');
+
+  const filteredOrders = orders.filter((o) => {
+    if (orderDateFilter && o.date !== orderDateFilter) return false;
+    if (orderSportFilter !== 'all' && o.sportType !== orderSportFilter) return false;
+    return true;
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  const orderStats = {
+    pending: filteredOrders.filter(o => o.status === 'pending').length,
+    completed: filteredOrders.filter(o => o.status === 'completed').length,
+    cancelled: filteredOrders.filter(o => o.status === 'cancelled').length,
+    noShow: filteredOrders.filter(o => o.status === 'no_show').length,
+  };
+
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  
+  const filteredPendingOrders = pendingOrders.filter((o) => {
+    if (!verifySearch.trim()) return true;
+    const keyword = verifySearch.toLowerCase();
+    return (
+      o.orderNo.toLowerCase().includes(keyword) ||
+      o.contactName.toLowerCase().includes(keyword) ||
+      o.contactPhone.includes(keyword) ||
+      o.venueName.toLowerCase().includes(keyword)
+    );
+  });
+
+  const todayCompletedOrders = completedOrders.filter(o => o.date === todayStr);
+
+  const handleVerifySearch = () => {
+    if (!verifySearch.trim()) {
+      setSearchedOrder(null);
+      return;
+    }
+    const keyword = verifySearch.trim().toLowerCase();
+    const found = orders.find(o => 
+      o.orderNo.toLowerCase() === keyword ||
+      o.orderNo.toLowerCase().includes(keyword)
+    );
+    setSearchedOrder(found || null);
+  };
+
+  const handleVerifyOrder = (orderId: string) => {
+    markAsVerified(orderId);
+    if (searchedOrder?.id === orderId) {
+      const updated = orders.find(o => o.id === orderId);
+      if (updated) {
+        setSearchedOrder({ ...updated, status: 'completed', isVerified: true });
+      }
+    }
+  };
 
   const handleAddNotice = () => {
     if (!newNoticeTitle.trim() || !newNoticeContent.trim()) return;
@@ -165,24 +233,75 @@ export default function AdminPage() {
     
     const venue = venues.find(v => v.id === compVenueId);
     const timeRanges = formatSelectedTimeRanges();
-    const existingCompName = getSelectedCompetitionName();
     
-    setCompetitionBySlots(compVenueId, compDate, selectedSlotIds, compName);
+    let competitionId: string;
     
-    const actionWord = existingCompName && existingCompName === compName ? '更新' : '发布';
+    if (editingCompetitionId) {
+      const oldComp = getCompetitionById(editingCompetitionId);
+      if (oldComp) {
+        updateCompetition(compVenueId, compDate, oldComp.slotIds, selectedSlotIds, compName, editingCompetitionId);
+        competitionId = editingCompetitionId;
+        
+        const oldNotice = notices.find(n => n.competitionId === editingCompetitionId);
+        if (oldNotice) {
+          deleteNotice(oldNotice.id);
+        }
+      } else {
+        competitionId = setCompetitionBySlots(compVenueId, compDate, selectedSlotIds, compName);
+      }
+    } else {
+      competitionId = setCompetitionBySlots(compVenueId, compDate, selectedSlotIds, compName);
+    }
     
     addNotice({
-      title: `${compName}（${actionWord}）`,
+      title: `${compName}（赛事公告）`,
       content: `${venue?.name || ''}将于${compDate} ${timeRanges}举办${compName}，该时段暂不开放预约。`,
       type: 'competition',
       date: format(new Date(), 'yyyy-MM-dd'),
       isImportant: true,
+      competitionId,
     });
     
     setCompSportType('');
     setCompVenueId('');
     setCompName('');
     setSelectedSlotIds([]);
+    setEditingCompetitionId(null);
+  };
+
+  const handleEditCompetition = (competitionId: string) => {
+    const comp = getCompetitionById(competitionId);
+    if (!comp) return;
+    
+    setCompSportType(comp.sportType);
+    setCompVenueId(comp.venueId);
+    setCompDate(comp.date);
+    setCompName(comp.name);
+    setSelectedSlotIds(comp.slotIds);
+    setEditingCompetitionId(competitionId);
+  };
+
+  const handleCancelEdit = () => {
+    setCompSportType('');
+    setCompVenueId('');
+    setCompName('');
+    setSelectedSlotIds([]);
+    setEditingCompetitionId(null);
+  };
+
+  const handleCancelCompetition = (competitionId: string) => {
+    if (!confirm('确定要取消这场赛事吗？取消后相关时段将恢复可预约状态。')) return;
+    
+    cancelCompetitionById(competitionId);
+    
+    const notice = notices.find(n => n.competitionId === competitionId);
+    if (notice) {
+      deleteNotice(notice.id);
+    }
+    
+    if (editingCompetitionId === competitionId) {
+      handleCancelEdit();
+    }
   };
 
   return (
@@ -386,7 +505,20 @@ export default function AdminPage() {
 
           {activeTab === 'competitions' && (
             <div className="space-y-6">
-              <h3 className="font-semibold text-slate-800">赛事排期</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-800">
+                  {editingCompetitionId ? '编辑赛事' : '赛事排期'}
+                </h3>
+                {editingCompetitionId && (
+                  <button
+                    onClick={handleCancelEdit}
+                    className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"
+                  >
+                    <X className="w-4 h-4" />
+                    取消编辑
+                  </button>
+                )}
+              </div>
               
               <div className="bg-slate-50 rounded-xl p-5 space-y-5">
                 <div>
@@ -473,7 +605,8 @@ export default function AdminPage() {
                         const isBooked = slot.status === 'booked';
                         const isMaintenance = slot.status === 'maintenance';
                         const isCompetition = slot.status === 'competition';
-                        const isDisabled = isBooked || isMaintenance;
+                        const isOwnCompetition = editingCompetitionId && slot.competitionId === editingCompetitionId;
+                        const isDisabled = isBooked || isMaintenance || (isCompetition && !isOwnCompetition);
 
                         return (
                           <button
@@ -486,14 +619,16 @@ export default function AdminPage() {
                               !isSelected && !isDisabled && 'bg-white text-slate-700 border border-slate-200 hover:border-blue-400 hover:bg-blue-50',
                               isBooked && 'bg-orange-50 text-orange-500 border border-orange-200 cursor-not-allowed',
                               isMaintenance && 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed',
-                              isCompetition && !isSelected && 'bg-blue-50 text-blue-500 border border-blue-200'
+                              isCompetition && !isSelected && !isOwnCompetition && 'bg-blue-50 text-blue-500 border border-blue-200 cursor-not-allowed',
+                              isOwnCompetition && !isSelected && 'bg-blue-50 text-blue-500 border border-blue-300'
                             )}
                           >
                             <div>{slot.startTime}</div>
                             <div className="text-[10px] opacity-75">
                               {isBooked && '已订'}
                               {isMaintenance && '维护'}
-                              {isCompetition && !isSelected && '赛事'}
+                              {isCompetition && !isSelected && !isOwnCompetition && '其他赛事'}
+                              {isOwnCompetition && !isSelected && '本赛事'}
                               {!isBooked && !isMaintenance && !isCompetition && '可选'}
                             </div>
                           </button>
@@ -515,10 +650,10 @@ export default function AdminPage() {
                         选中的时段包含不同赛事，请选择同一赛事的时段
                       </p>
                     )}
-                    {getSelectedCompetitionName() && !hasMixedCompetitions() && (
+                    {editingCompetitionId && (
                       <p className="text-xs text-blue-600 mt-2 flex items-center gap-1">
                         <Trophy className="w-3 h-3" />
-                        将更新「{getSelectedCompetitionName()}」赛事信息
+                        正在编辑「{compName}」赛事
                       </p>
                     )}
                   </div>
@@ -536,9 +671,67 @@ export default function AdminPage() {
                     )}
                   >
                     <Trophy className="w-5 h-5" />
-                    {getSelectedCompetitionName() && !hasMixedCompetitions() ? '更新赛事排期' : '发布赛事排期'}
+                    {editingCompetitionId ? '保存修改' : '发布赛事排期'}
                   </button>
                 </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="font-medium text-slate-700">已发布赛事</h4>
+                {getAllCompetitions().length === 0 ? (
+                  <div className="bg-white rounded-xl p-8 text-center border border-slate-100">
+                    <Trophy className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-400 text-sm">暂无赛事排期</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {getAllCompetitions().map((comp) => (
+                      <div key={comp.id} className="bg-white rounded-xl p-4 border border-slate-100 hover:border-blue-200 transition-all">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Trophy className="w-4 h-4 text-blue-500" />
+                              <span className="font-medium text-slate-800">{comp.name}</span>
+                              <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-600 rounded-full">
+                                {comp.sportType === 'badminton' ? '羽毛球' : comp.sportType === 'tabletennis' ? '乒乓球' : '健身房'}
+                              </span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm text-slate-600">
+                              <div className="flex items-center gap-1">
+                                <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                                <span>{comp.venueName}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                                <span>{comp.date}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                <span>{comp.timeRanges}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 ml-4">
+                            <button
+                              onClick={() => handleEditCompetition(comp.id)}
+                              className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-all"
+                              title="编辑赛事"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleCancelCompetition(comp.id)}
+                              className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                              title="取消赛事"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -549,6 +742,7 @@ export default function AdminPage() {
                     <li>• 普通用户无法预约赛事占用的时段</li>
                     <li>• 发布赛事时会自动生成一条赛事公告</li>
                     <li>• 已被预约的时段不能设置为赛事</li>
+                    <li>• 编辑赛事后，日历和公告会同步更新</li>
                   </ul>
                 </div>
               </div>
@@ -658,6 +852,213 @@ export default function AdminPage() {
             </div>
           )}
 
+          {activeTab === 'orders' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-800">订单台账</h3>
+                <div className="text-sm text-slate-500">
+                  共 <span className="font-medium text-slate-700">{filteredOrders.length}</span> 条订单
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl p-4 border border-slate-100">
+                <div className="flex flex-wrap gap-4">
+                  <div className="flex-1 min-w-[200px]">
+                    <label className="block text-sm font-medium text-slate-600 mb-1.5">按日期筛选</label>
+                    <input
+                      type="date"
+                      value={orderDateFilter}
+                      onChange={(e) => setOrderDateFilter(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 text-sm"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-[200px]">
+                    <label className="block text-sm font-medium text-slate-600 mb-1.5">按项目筛选</label>
+                    <select
+                      value={orderSportFilter}
+                      onChange={(e) => setOrderSportFilter(e.target.value as SportType | 'all')}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 text-sm bg-white"
+                    >
+                      <option value="all">全部项目</option>
+                      <option value="badminton">羽毛球</option>
+                      <option value="tabletennis">乒乓球</option>
+                      <option value="gym">健身房</option>
+                    </select>
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={() => {
+                        setOrderDateFilter('');
+                        setOrderSportFilter('all');
+                      }}
+                      className="px-4 py-2 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg hover:border-slate-300 transition-all"
+                    >
+                      重置筛选
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-orange-50 rounded-xl p-4 border border-orange-100">
+                  <div className="text-2xl font-bold text-orange-600 mb-1">{orderStats.pending}</div>
+                  <div className="text-sm text-orange-600/70">待使用</div>
+                </div>
+                <div className="bg-green-50 rounded-xl p-4 border border-green-100">
+                  <div className="text-2xl font-bold text-green-600 mb-1">{orderStats.completed}</div>
+                  <div className="text-sm text-green-600/70">已到场</div>
+                </div>
+                <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+                  <div className="text-2xl font-bold text-gray-600 mb-1">{orderStats.cancelled}</div>
+                  <div className="text-sm text-gray-500">已取消</div>
+                </div>
+                <div className="bg-red-50 rounded-xl p-4 border border-red-100">
+                  <div className="text-2xl font-bold text-red-600 mb-1">{orderStats.noShow}</div>
+                  <div className="text-sm text-red-600/70">爽约</div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {filteredOrders.length === 0 ? (
+                  <div className="bg-white rounded-xl p-8 text-center border border-slate-100">
+                    <ClipboardList className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-400 text-sm">暂无订单记录</p>
+                  </div>
+                ) : (
+                  filteredOrders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="bg-white rounded-xl border border-slate-100 overflow-hidden hover:border-blue-200 transition-all"
+                    >
+                      <div
+                        className="p-4 cursor-pointer"
+                        onClick={() => setExpandedOrderId(expandedOrderId === order.id ? null : order.id)}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={cn(
+                              'w-10 h-10 rounded-lg flex items-center justify-center',
+                              order.status === 'pending' && 'bg-orange-100',
+                              order.status === 'completed' && 'bg-green-100',
+                              order.status === 'cancelled' && 'bg-gray-100',
+                              order.status === 'no_show' && 'bg-red-100'
+                            )}>
+                              {order.sportType === 'badminton' && <Target className={cn(
+                                'w-5 h-5',
+                                order.status === 'pending' && 'text-orange-600',
+                                order.status === 'completed' && 'text-green-600',
+                                order.status === 'cancelled' && 'text-gray-500',
+                                order.status === 'no_show' && 'text-red-600'
+                              )} />}
+                              {order.sportType === 'tabletennis' && <CircleDot className={cn(
+                                'w-5 h-5',
+                                order.status === 'pending' && 'text-orange-600',
+                                order.status === 'completed' && 'text-green-600',
+                                order.status === 'cancelled' && 'text-gray-500',
+                                order.status === 'no_show' && 'text-red-600'
+                              )} />}
+                              {order.sportType === 'gym' && <Dumbbell className={cn(
+                                'w-5 h-5',
+                                order.status === 'pending' && 'text-orange-600',
+                                order.status === 'completed' && 'text-green-600',
+                                order.status === 'cancelled' && 'text-gray-500',
+                                order.status === 'no_show' && 'text-red-600'
+                              )} />}
+                            </div>
+                            <div>
+                              <div className="font-medium text-slate-800">{order.orderNo}</div>
+                              <div className="text-sm text-slate-500">
+                                {order.venueName} · {order.date} {order.startTime}-{order.endTime}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className={cn(
+                              'text-xs px-2.5 py-1 rounded-full font-medium',
+                              order.status === 'pending' && 'bg-orange-100 text-orange-700',
+                              order.status === 'completed' && 'bg-green-100 text-green-700',
+                              order.status === 'cancelled' && 'bg-gray-100 text-gray-600',
+                              order.status === 'no_show' && 'bg-red-100 text-red-700'
+                            )}>
+                              {order.status === 'pending' && '待使用'}
+                              {order.status === 'completed' && '已到场'}
+                              {order.status === 'cancelled' && '已取消'}
+                              {order.status === 'no_show' && '爽约'}
+                            </span>
+                            {expandedOrderId === order.id ? (
+                              <ChevronUp className="w-5 h-5 text-slate-400" />
+                            ) : (
+                              <ChevronDown className="w-5 h-5 text-slate-400" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {expandedOrderId === order.id && (
+                        <div className="px-4 pb-4 border-t border-slate-100">
+                          <div className="pt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                            <div>
+                              <div className="text-slate-400 mb-1">联系人</div>
+                              <div className="font-medium text-slate-700 flex items-center gap-1.5">
+                                <User className="w-3.5 h-3.5 text-slate-400" />
+                                {order.contactName}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-slate-400 mb-1">联系电话</div>
+                              <div className="font-medium text-slate-700 flex items-center gap-1.5">
+                                <Phone className="w-3.5 h-3.5 text-slate-400" />
+                                {order.contactPhone}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-slate-400 mb-1">预约人数</div>
+                              <div className="font-medium text-slate-700 flex items-center gap-1.5">
+                                <UsersIcon className="w-3.5 h-3.5 text-slate-400" />
+                                {order.peopleCount} 人
+                              </div>
+                            </div>
+                            <div>
+                              <div className="text-slate-400 mb-1">费用</div>
+                              <div className="font-medium text-slate-700 flex items-center gap-1.5">
+                                <DollarSign className="w-3.5 h-3.5 text-slate-400" />
+                                {order.price === 0 ? '免费' : `¥${order.price}`}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="pt-4 mt-4 border-t border-slate-50">
+                            <div className="flex items-center justify-between">
+                              <div className="text-sm text-slate-500">
+                                核销状态：
+                                <span className={cn(
+                                  'font-medium ml-1',
+                                  order.isVerified ? 'text-green-600' : 'text-slate-400'
+                                )}>
+                                  {order.isVerified ? '已核销' : '未核销'}
+                                </span>
+                              </div>
+                              {order.status === 'pending' && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    markAsVerified(order.id);
+                                  }}
+                                  className="text-sm px-4 py-1.5 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-all"
+                                >
+                                  确认入场
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           {activeTab === 'verification' && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
@@ -665,7 +1066,7 @@ export default function AdminPage() {
                 <div className="text-sm text-slate-500">
                   待核销 <span className="font-medium text-orange-600">{pendingOrders.length}</span> 单
                   <span className="mx-2">·</span>
-                  已核销 <span className="font-medium text-green-600">{completedOrders.length}</span> 单
+                  已核销 <span className="font-medium text-green-600">{todayCompletedOrders.length}</span> 单
                 </div>
               </div>
 
@@ -675,24 +1076,76 @@ export default function AdminPage() {
                   type="text"
                   value={verifySearch}
                   onChange={(e) => setVerifySearch(e.target.value)}
-                  placeholder="搜索订单号、姓名、手机号..."
-                  className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:border-orange-500 bg-white"
+                  onKeyDown={(e) => e.key === 'Enter' && handleVerifySearch()}
+                  placeholder="输入订单号、姓名、手机号搜索..."
+                  className="w-full pl-12 pr-24 py-3 rounded-xl border border-slate-200 focus:outline-none focus:border-orange-500 bg-white"
                 />
+                <button
+                  onClick={handleVerifySearch}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 bg-orange-500 text-white text-sm rounded-lg hover:bg-orange-600 transition-colors"
+                >
+                  搜索
+                </button>
               </div>
+
+              {searchedOrder && (
+                <div className="bg-orange-50 rounded-xl border-2 border-orange-300 p-4">
+                  <p className="text-sm text-orange-700 font-medium mb-3 flex items-center gap-1.5">
+                    <Target className="w-4 h-4" />
+                    搜索结果
+                  </p>
+                  <div className="bg-white rounded-lg p-4 border border-orange-200">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-orange-50 flex items-center justify-center">
+                          <QrCode className="w-6 h-6 text-orange-500" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-slate-800">{searchedOrder.venueName}</p>
+                          <p className="text-sm text-slate-500">
+                            {searchedOrder.date} {searchedOrder.startTime}-{searchedOrder.endTime}
+                          </p>
+                          <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                            {searchedOrder.orderNo}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-slate-700">{searchedOrder.contactName}</p>
+                        <p className="text-xs text-slate-500">{searchedOrder.contactPhone}</p>
+                        <p className="text-xs text-slate-500 mt-1">{searchedOrder.peopleCount} 人</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex justify-between items-center">
+                      <span className={cn(
+                        'text-xs px-2.5 py-1 rounded-full font-medium',
+                        searchedOrder.status === 'pending' && 'bg-orange-100 text-orange-700',
+                        searchedOrder.status === 'completed' && 'bg-green-100 text-green-700',
+                        searchedOrder.status === 'cancelled' && 'bg-gray-100 text-gray-600',
+                        searchedOrder.status === 'no_show' && 'bg-red-100 text-red-700'
+                      )}>
+                        {searchedOrder.status === 'pending' && '待使用'}
+                        {searchedOrder.status === 'completed' && '已到场'}
+                        {searchedOrder.status === 'cancelled' && '已取消'}
+                        {searchedOrder.status === 'no_show' && '爽约'}
+                      </span>
+                      {searchedOrder.status === 'pending' && (
+                        <button
+                          onClick={() => handleVerifyOrder(searchedOrder.id)}
+                          className="px-4 py-2 rounded-lg bg-green-500 text-white text-sm font-medium hover:bg-green-600 transition-colors flex items-center gap-1.5"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          确认入场
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-3">
                 <h4 className="font-medium text-slate-700">待核销订单</h4>
-                {pendingOrders
-                  .filter((o) => {
-                    if (!verifySearch.trim()) return true;
-                    const keyword = verifySearch.toLowerCase();
-                    return (
-                      o.orderNo.toLowerCase().includes(keyword) ||
-                      o.contactName.toLowerCase().includes(keyword) ||
-                      o.contactPhone.includes(keyword) ||
-                      o.venueName.toLowerCase().includes(keyword)
-                    );
-                  })
+                {filteredPendingOrders
                   .map((order) => (
                     <div
                       key={order.id}
@@ -730,16 +1183,7 @@ export default function AdminPage() {
                       </div>
                     </div>
                   ))}
-                {pendingOrders.filter((o) => {
-                  if (!verifySearch.trim()) return true;
-                  const keyword = verifySearch.toLowerCase();
-                  return (
-                    o.orderNo.toLowerCase().includes(keyword) ||
-                    o.contactName.toLowerCase().includes(keyword) ||
-                    o.contactPhone.includes(keyword) ||
-                    o.venueName.toLowerCase().includes(keyword)
-                  );
-                }).length === 0 && (
+                {filteredPendingOrders.length === 0 && (
                   <div className="text-center py-12 text-slate-400">
                     <QrCode className="w-12 h-12 mx-auto mb-3 opacity-30" />
                     <p>暂无待核销订单</p>
@@ -747,10 +1191,10 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {completedOrders.length > 0 && (
+              {todayCompletedOrders.length > 0 && (
                 <div className="space-y-3">
                   <h4 className="font-medium text-slate-700">今日已核销</h4>
-                  {completedOrders.slice(0, 5).map((order) => (
+                  {todayCompletedOrders.map((order) => (
                     <div
                       key={order.id}
                       className="bg-green-50 rounded-xl border border-green-100 p-3 flex items-center justify-between"

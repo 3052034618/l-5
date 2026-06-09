@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Venue, TimeSlot, BookingFormData, SportType } from '../types';
+import type { Venue, TimeSlot, BookingFormData, SportType, CompetitionInfo } from '../types';
 import { venues, generateTimeSlots } from '../data/mockData';
 import { format } from 'date-fns';
 
@@ -24,8 +24,12 @@ interface BookingState {
   cancelBooking: (timeSlotId: string) => void;
   setMaintenance: (venueId: string, date: string, isMaintenance: boolean) => void;
   setCompetition: (venueId: string, date: string, competitionName: string, timeRange: string) => void;
-  setCompetitionBySlots: (venueId: string, date: string, slotIds: string[], competitionName: string) => void;
+  setCompetitionBySlots: (venueId: string, date: string, slotIds: string[], competitionName: string, competitionId?: string) => string;
   cancelCompetition: (venueId: string, date: string, slotIds: string[]) => void;
+  updateCompetition: (venueId: string, date: string, oldSlotIds: string[], newSlotIds: string[], competitionName: string, competitionId: string) => void;
+  getAllCompetitions: () => CompetitionInfo[];
+  getCompetitionById: (competitionId: string) => CompetitionInfo | undefined;
+  cancelCompetitionById: (competitionId: string) => void;
 }
 
 const initialFormData: BookingFormData = {
@@ -140,33 +144,159 @@ export const useBookingStore = create<BookingState>()(
           };
         }),
 
-      setCompetitionBySlots: (venueId, date, slotIds, competitionName) =>
+      setCompetitionBySlots: (venueId, date, slotIds, competitionName, competitionId) => {
+        const newCompId = competitionId || `comp-${Date.now()}`;
         set((state) => ({
           timeSlots: state.timeSlots.map((slot) => {
             if (slot.venueId === venueId && slot.date === date && slotIds.includes(slot.id)) {
               if (slot.status === 'available') {
-                return { ...slot, status: 'competition' as const, competitionName };
+                return { ...slot, status: 'competition' as const, competitionName, competitionId: newCompId };
+              }
+              if (slot.status === 'competition') {
+                return { ...slot, competitionName, competitionId: newCompId };
               }
             }
             return slot;
           }),
-        })),
+        }));
+        return newCompId;
+      },
 
       cancelCompetition: (venueId, date, slotIds) =>
         set((state) => ({
           timeSlots: state.timeSlots.map((slot) => {
             if (slot.venueId === venueId && slot.date === date && slotIds.includes(slot.id)) {
               if (slot.status === 'competition') {
-                return { ...slot, status: 'available' as const, competitionName: undefined };
+                return { ...slot, status: 'available' as const, competitionName: undefined, competitionId: undefined };
               }
             }
             return slot;
           }),
         })),
+
+      updateCompetition: (venueId, date, oldSlotIds, newSlotIds, competitionName, competitionId) =>
+        set((state) => {
+          const slotsToRemove = oldSlotIds.filter(id => !newSlotIds.includes(id));
+          const slotsToAdd = newSlotIds.filter(id => !oldSlotIds.includes(id));
+          const slotsToKeep = newSlotIds.filter(id => oldSlotIds.includes(id));
+          
+          return {
+            timeSlots: state.timeSlots.map((slot) => {
+              if (slot.venueId !== venueId || slot.date !== date) return slot;
+              
+              if (slotsToRemove.includes(slot.id) && slot.status === 'competition') {
+                return { ...slot, status: 'available' as const, competitionName: undefined, competitionId: undefined };
+              }
+              
+              if (slotsToAdd.includes(slot.id) && slot.status === 'available') {
+                return { ...slot, status: 'competition' as const, competitionName, competitionId };
+              }
+              
+              if (slotsToKeep.includes(slot.id) && slot.status === 'competition') {
+                return { ...slot, competitionName, competitionId };
+              }
+              
+              return slot;
+            }),
+          };
+        }),
+
+      cancelCompetitionById: (competitionId) =>
+        set((state) => ({
+          timeSlots: state.timeSlots.map((slot) => {
+            if (slot.competitionId === competitionId && slot.status === 'competition') {
+              return { ...slot, status: 'available' as const, competitionName: undefined, competitionId: undefined };
+            }
+            return slot;
+          }),
+        })),
+
+      getAllCompetitions: () => {
+        const { timeSlots, venues } = get();
+        const competitionMap = new Map<string, { slots: TimeSlot[]; venueId: string; date: string; name: string; id: string }>();
+        
+        timeSlots.forEach((slot) => {
+          if (slot.status === 'competition' && slot.competitionId) {
+            const key = slot.competitionId;
+            if (!competitionMap.has(key)) {
+              competitionMap.set(key, {
+                slots: [],
+                venueId: slot.venueId,
+                date: slot.date,
+                name: slot.competitionName || '',
+                id: slot.competitionId,
+              });
+            }
+            competitionMap.get(key)!.slots.push(slot);
+          }
+        });
+        
+        const competitions: CompetitionInfo[] = [];
+        competitionMap.forEach((comp) => {
+          const venue = venues.find(v => v.id === comp.venueId);
+          const sortedSlots = [...comp.slots].sort((a, b) => a.startTime.localeCompare(b.startTime));
+          
+          const ranges: string[] = [];
+          let rangeStart = sortedSlots[0].startTime;
+          let prevEnd = sortedSlots[0].endTime;
+          
+          for (let i = 1; i < sortedSlots.length; i++) {
+            if (sortedSlots[i].startTime === prevEnd) {
+              prevEnd = sortedSlots[i].endTime;
+            } else {
+              ranges.push(`${rangeStart}-${prevEnd}`);
+              rangeStart = sortedSlots[i].startTime;
+              prevEnd = sortedSlots[i].endTime;
+            }
+          }
+          ranges.push(`${rangeStart}-${prevEnd}`);
+          
+          competitions.push({
+            id: comp.id,
+            name: comp.name,
+            venueId: comp.venueId,
+            venueName: venue?.name || comp.venueId,
+            sportType: venue?.type || 'badminton',
+            date: comp.date,
+            slotIds: sortedSlots.map(s => s.id),
+            startTime: sortedSlots[0].startTime,
+            endTime: sortedSlots[sortedSlots.length - 1].endTime,
+            timeRanges: ranges.join('、'),
+          });
+        });
+        
+        return competitions.sort((a, b) => {
+          if (a.date !== b.date) return a.date.localeCompare(b.date);
+          return a.startTime.localeCompare(b.startTime);
+        });
+      },
+
+      getCompetitionById: (competitionId) => {
+        const all = get().getAllCompetitions();
+        return all.find(c => c.id === competitionId);
+      },
     }),
     {
       name: 'gym-booking-store',
       partialize: (state) => ({ timeSlots: state.timeSlots, selectedDate: state.selectedDate }),
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        
+        const nameToId = new Map<string, string>();
+        let counter = 0;
+        
+        state.timeSlots = state.timeSlots.map(slot => {
+          if (slot.status === 'competition' && slot.competitionName && !slot.competitionId) {
+            const key = `${slot.venueId}-${slot.date}-${slot.competitionName}`;
+            if (!nameToId.has(key)) {
+              counter++;
+              nameToId.set(key, `comp-migrated-${Date.now()}-${counter}`);
+            }
+            return { ...slot, competitionId: nameToId.get(key) };
+          }
+          return slot;
+        });
+      },
     }
   )
 );
