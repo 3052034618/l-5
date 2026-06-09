@@ -17,6 +17,11 @@ import {
   BarChart3,
   UserX,
   Save,
+  Target,
+  CircleDot,
+  Dumbbell,
+  QrCode,
+  Search,
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { useAdminStore } from '../store/useAdminStore';
@@ -25,24 +30,34 @@ import { useUserStore } from '../store/useUserStore';
 import { cn } from '../lib/utils';
 import { format, addDays } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+import type { SportType } from '../types';
 
-type TabType = 'overview' | 'venues' | 'notices' | 'settings' | 'noshow';
+type TabType = 'overview' | 'venues' | 'competitions' | 'notices' | 'verification' | 'settings' | 'noshow';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const { settings, setDailyBookingLimit, statistics, notices, addNotice, deleteNotice } = useAdminStore();
-  const { venues, setMaintenance, selectedDate, setSelectedDate, getTimeSlotsByVenue } = useBookingStore();
-  const { orders, markAsNoShow } = useUserStore();
+  const { venues, setMaintenance, selectedDate, setSelectedDate, getTimeSlotsByVenue, getTimeSlotsByVenueAndDate, setCompetitionBySlots, cancelCompetition } = useBookingStore();
+  const { orders, markAsNoShow, markAsVerified } = useUserStore();
 
   const [newNoticeTitle, setNewNoticeTitle] = useState('');
   const [newNoticeContent, setNewNoticeContent] = useState('');
   const [newNoticeType, setNewNoticeType] = useState<'announcement' | 'competition' | 'rule'>('announcement');
   const [newNoticeImportant, setNewNoticeImportant] = useState(false);
 
+  const [compSportType, setCompSportType] = useState<SportType | ''>('');
+  const [compVenueId, setCompVenueId] = useState('');
+  const [compDate, setCompDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [compName, setCompName] = useState('');
+  const [selectedSlotIds, setSelectedSlotIds] = useState<string[]>([]);
+  const [verifySearch, setVerifySearch] = useState('');
+
   const tabs: { value: TabType; label: string; icon: React.ElementType }[] = [
     { value: 'overview', label: '数据概览', icon: BarChart3 },
     { value: 'venues', label: '场地管理', icon: MapPin },
+    { value: 'competitions', label: '赛事排期', icon: Trophy },
     { value: 'notices', label: '公告管理', icon: Bell },
+    { value: 'verification', label: '入场核销', icon: QrCode },
     { value: 'settings', label: '预约设置', icon: Settings },
     { value: 'noshow', label: '爽约管理', icon: UserX },
   ];
@@ -70,6 +85,45 @@ export default function AdminPage() {
     const slots = getTimeSlotsByVenue(venueId);
     const hasMaintenance = slots.some((s) => s.status === 'maintenance');
     setMaintenance(venueId, selectedDate, !hasMaintenance);
+  };
+
+  const filteredVenues = compSportType 
+    ? venues.filter(v => v.type === compSportType) 
+    : venues;
+
+  const compSlots = compVenueId 
+    ? getTimeSlotsByVenueAndDate(compVenueId, compDate) 
+    : [];
+
+  const handleToggleSlot = (slotId: string) => {
+    setSelectedSlotIds(prev => 
+      prev.includes(slotId) 
+        ? prev.filter(id => id !== slotId) 
+        : [...prev, slotId]
+    );
+  };
+
+  const handlePublishCompetition = () => {
+    if (!compVenueId || !compName.trim() || selectedSlotIds.length === 0) return;
+    
+    setCompetitionBySlots(compVenueId, compDate, selectedSlotIds, compName);
+    
+    const venue = venues.find(v => v.id === compVenueId);
+    const startTime = compSlots.find(s => s.id === selectedSlotIds[0])?.startTime || '';
+    const endTime = compSlots.find(s => s.id === selectedSlotIds[selectedSlotIds.length - 1])?.endTime || '';
+    
+    addNotice({
+      title: compName,
+      content: `${venue?.name || ''}将于${compDate} ${startTime}-${endTime}举办${compName}，该时段暂不开放预约。`,
+      type: 'competition',
+      date: format(new Date(), 'yyyy-MM-dd'),
+      isImportant: true,
+    });
+    
+    setCompSportType('');
+    setCompVenueId('');
+    setCompName('');
+    setSelectedSlotIds([]);
   };
 
   return (
@@ -271,6 +325,161 @@ export default function AdminPage() {
             </div>
           )}
 
+          {activeTab === 'competitions' && (
+            <div className="space-y-6">
+              <h3 className="font-semibold text-slate-800">赛事排期</h3>
+              
+              <div className="bg-slate-50 rounded-xl p-5 space-y-5">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">运动项目</label>
+                  <div className="flex gap-2">
+                    {[
+                      { value: 'badminton', label: '羽毛球', icon: Target },
+                      { value: 'tabletennis', label: '乒乓球', icon: CircleDot },
+                      { value: 'gym', label: '健身房', icon: Dumbbell },
+                    ].map((item) => (
+                      <button
+                        key={item.value}
+                        onClick={() => {
+                          setCompSportType(item.value as SportType);
+                          setCompVenueId('');
+                          setSelectedSlotIds([]);
+                        }}
+                        className={cn(
+                          'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all',
+                          compSportType === item.value
+                            ? 'bg-blue-500 text-white shadow-md shadow-blue-500/25'
+                            : 'bg-white text-slate-600 border border-slate-200 hover:border-slate-300'
+                        )}
+                      >
+                        <item.icon className="w-4 h-4" />
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">选择场地</label>
+                    <select
+                      value={compVenueId}
+                      onChange={(e) => {
+                        setCompVenueId(e.target.value);
+                        setSelectedSlotIds([]);
+                      }}
+                      className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 bg-white"
+                    >
+                      <option value="">请选择场地</option>
+                      {filteredVenues.map((venue) => (
+                        <option key={venue.id} value={venue.id}>
+                          {venue.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">选择日期</label>
+                    <input
+                      type="date"
+                      value={compDate}
+                      onChange={(e) => {
+                        setCompDate(e.target.value);
+                        setSelectedSlotIds([]);
+                      }}
+                      className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">赛事名称</label>
+                  <input
+                    type="text"
+                    value={compName}
+                    onChange={(e) => setCompName(e.target.value)}
+                    placeholder="请输入赛事名称，如：校羽毛球公开赛"
+                    className="w-full px-4 py-2 rounded-lg border border-slate-200 focus:outline-none focus:border-blue-500 bg-white"
+                  />
+                </div>
+
+                {compVenueId && (
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      选择时段（可多选）
+                    </label>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2">
+                      {compSlots.map((slot) => {
+                        const isSelected = selectedSlotIds.includes(slot.id);
+                        const isBooked = slot.status === 'booked';
+                        const isMaintenance = slot.status === 'maintenance';
+                        const isCompetition = slot.status === 'competition';
+                        const isDisabled = isBooked || isMaintenance;
+
+                        return (
+                          <button
+                            key={slot.id}
+                            onClick={() => !isDisabled && handleToggleSlot(slot.id)}
+                            disabled={isDisabled}
+                            className={cn(
+                              'px-2 py-3 rounded-lg text-xs font-medium transition-all text-center',
+                              isSelected && 'bg-blue-500 text-white shadow-md',
+                              !isSelected && !isDisabled && 'bg-white text-slate-700 border border-slate-200 hover:border-blue-400 hover:bg-blue-50',
+                              isBooked && 'bg-orange-50 text-orange-500 border border-orange-200 cursor-not-allowed',
+                              isMaintenance && 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed',
+                              isCompetition && !isSelected && 'bg-blue-50 text-blue-500 border border-blue-200'
+                            )}
+                          >
+                            <div>{slot.startTime}</div>
+                            <div className="text-[10px] opacity-75">
+                              {isBooked && '已订'}
+                              {isMaintenance && '维护'}
+                              {isCompetition && !isSelected && '赛事'}
+                              {!isBooked && !isMaintenance && !isCompetition && '可选'}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-slate-500 mt-2">
+                      已选择 <span className="font-medium text-blue-600">{selectedSlotIds.length}</span> 个时段
+                      <span className="mx-2">·</span>
+                      已订和维护时段不可选
+                    </p>
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-slate-200">
+                  <button
+                    onClick={handlePublishCompetition}
+                    disabled={!compVenueId || !compName.trim() || selectedSlotIds.length === 0}
+                    className={cn(
+                      'w-full py-3 rounded-xl font-medium transition-all flex items-center justify-center gap-2',
+                      compVenueId && compName.trim() && selectedSlotIds.length > 0
+                        ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700 shadow-lg shadow-blue-500/25'
+                        : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    )}
+                  >
+                    <Trophy className="w-5 h-5" />
+                    发布赛事排期
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="font-medium text-slate-700">排期说明</h4>
+                <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+                  <ul className="text-sm text-blue-700 space-y-2">
+                    <li>• 赛事排期发布后，对应时段将显示为比赛状态（蓝色）</li>
+                    <li>• 普通用户无法预约赛事占用的时段</li>
+                    <li>• 发布赛事时会自动生成一条赛事公告</li>
+                    <li>• 已被预约的时段不能设置为赛事</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
           {activeTab === 'notices' && (
             <div className="space-y-6">
               <h3 className="font-semibold text-slate-800">发布公告</h3>
@@ -371,6 +580,120 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'verification' && (
+            <div className="space-y-6">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-800">入场核销</h3>
+                <div className="text-sm text-slate-500">
+                  待核销 <span className="font-medium text-orange-600">{pendingOrders.length}</span> 单
+                  <span className="mx-2">·</span>
+                  已核销 <span className="font-medium text-green-600">{completedOrders.length}</span> 单
+                </div>
+              </div>
+
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                <input
+                  type="text"
+                  value={verifySearch}
+                  onChange={(e) => setVerifySearch(e.target.value)}
+                  placeholder="搜索订单号、姓名、手机号..."
+                  className="w-full pl-12 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:border-orange-500 bg-white"
+                />
+              </div>
+
+              <div className="space-y-3">
+                <h4 className="font-medium text-slate-700">待核销订单</h4>
+                {pendingOrders
+                  .filter((o) => {
+                    if (!verifySearch.trim()) return true;
+                    const keyword = verifySearch.toLowerCase();
+                    return (
+                      o.orderNo.toLowerCase().includes(keyword) ||
+                      o.contactName.toLowerCase().includes(keyword) ||
+                      o.contactPhone.includes(keyword) ||
+                      o.venueName.toLowerCase().includes(keyword)
+                    );
+                  })
+                  .map((order) => (
+                    <div
+                      key={order.id}
+                      className="bg-white rounded-xl border border-slate-200 p-4 hover:shadow-md transition-shadow"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-xl bg-orange-50 flex items-center justify-center">
+                            <QrCode className="w-6 h-6 text-orange-500" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-slate-800">{order.venueName}</p>
+                            <p className="text-sm text-slate-500">
+                              {order.date} {order.startTime}-{order.endTime}
+                            </p>
+                            <p className="text-xs text-slate-400 mt-0.5 font-mono">
+                              {order.orderNo}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-medium text-slate-700">{order.contactName}</p>
+                          <p className="text-xs text-slate-500">{order.contactPhone}</p>
+                          <p className="text-xs text-slate-500 mt-1">{order.peopleCount} 人</p>
+                        </div>
+                      </div>
+                      <div className="mt-3 pt-3 border-t border-slate-100 flex justify-end gap-2">
+                        <button
+                          onClick={() => markAsVerified(order.id)}
+                          className="px-4 py-2 rounded-lg bg-green-500 text-white text-sm font-medium hover:bg-green-600 transition-colors flex items-center gap-1.5"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          确认入场
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                {pendingOrders.filter((o) => {
+                  if (!verifySearch.trim()) return true;
+                  const keyword = verifySearch.toLowerCase();
+                  return (
+                    o.orderNo.toLowerCase().includes(keyword) ||
+                    o.contactName.toLowerCase().includes(keyword) ||
+                    o.contactPhone.includes(keyword) ||
+                    o.venueName.toLowerCase().includes(keyword)
+                  );
+                }).length === 0 && (
+                  <div className="text-center py-12 text-slate-400">
+                    <QrCode className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                    <p>暂无待核销订单</p>
+                  </div>
+                )}
+              </div>
+
+              {completedOrders.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="font-medium text-slate-700">今日已核销</h4>
+                  {completedOrders.slice(0, 5).map((order) => (
+                    <div
+                      key={order.id}
+                      className="bg-green-50 rounded-xl border border-green-100 p-3 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        <CheckCircle className="w-5 h-5 text-green-500" />
+                        <div>
+                          <p className="text-sm font-medium text-slate-700">{order.venueName}</p>
+                          <p className="text-xs text-slate-500">
+                            {order.contactName} · {order.startTime}-{order.endTime}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-xs text-green-600 font-medium">已入场</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

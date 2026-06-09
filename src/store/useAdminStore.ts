@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Notice, AdminSettings, Statistics } from '../types';
 import { notices, adminSettings, generateStatistics } from '../data/mockData';
 
@@ -14,44 +15,52 @@ interface AdminState {
   refreshStatistics: () => void;
 }
 
-export const useAdminStore = create<AdminState>((set) => ({
-  settings: adminSettings,
-  notices,
-  statistics: generateStatistics(),
-
-  setDailyBookingLimit: (limit) =>
-    set((state) => ({
-      settings: { ...state.settings, dailyBookingLimit: limit },
-    })),
-  
-  setOpenTime: (time) =>
-    set((state) => ({
-      settings: { ...state.settings, openTime: time },
-    })),
-  
-  setCloseTime: (time) =>
-    set((state) => ({
-      settings: { ...state.settings, closeTime: time },
-    })),
-  
-  addNotice: (notice) =>
-    set((state) => ({
-      notices: [
-        {
-          ...notice,
-          id: `notice-${Date.now()}`,
-        },
-        ...state.notices,
-      ],
-    })),
-  
-  deleteNotice: (noticeId) =>
-    set((state) => ({
-      notices: state.notices.filter((n) => n.id !== noticeId),
-    })),
-  
-  refreshStatistics: () =>
-    set({
+export const useAdminStore = create<AdminState>()(
+  persist(
+    (set) => ({
+      settings: adminSettings,
+      notices,
       statistics: generateStatistics(),
+
+      setDailyBookingLimit: (limit) =>
+        set((state) => ({
+          settings: { ...state.settings, dailyBookingLimit: limit },
+        })),
+      
+      setOpenTime: (time) =>
+        set((state) => ({
+          settings: { ...state.settings, openTime: time },
+        })),
+      
+      setCloseTime: (time) =>
+        set((state) => ({
+          settings: { ...state.settings, closeTime: time },
+        })),
+      
+      addNotice: (notice) =>
+        set((state) => ({
+          notices: [
+            {
+              ...notice,
+              id: `notice-${Date.now()}`,
+            },
+            ...state.notices,
+          ],
+        })),
+      
+      deleteNotice: (noticeId) =>
+        set((state) => ({
+          notices: state.notices.filter((n) => n.id !== noticeId),
+        })),
+      
+      refreshStatistics: () =>
+        set({
+          statistics: generateStatistics(),
+        }),
     }),
-}));
+    {
+      name: 'gym-admin-store',
+      partialize: (state) => ({ settings: state.settings, notices: state.notices }),
+    }
+  )
+);

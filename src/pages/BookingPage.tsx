@@ -41,6 +41,7 @@ export default function BookingPage() {
   const [contactName, setContactName] = useState(user.name);
   const [contactPhone, setContactPhone] = useState(user.phone);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [lastOrder, setLastOrder] = useState<Order | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -111,11 +112,10 @@ export default function BookingPage() {
 
     const orderNo = `GYM${format(new Date(), 'yyyyMMdd')}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`;
     
-    const price = selectedVenue.isFree 
-      ? 0 
-      : selectedVenue.pricePerHour * (parseInt(selectedSlot.endTime) - parseInt(selectedSlot.startTime));
+    const duration = parseInt(selectedSlot.endTime) - parseInt(selectedSlot.startTime);
+    const price = selectedVenue.isFree ? 0 : selectedVenue.pricePerHour * duration;
 
-    const newOrder = {
+    const newOrder: Order = {
       id: `order-${Date.now()}`,
       orderNo,
       venueId: selectedVenue.id,
@@ -128,22 +128,23 @@ export default function BookingPage() {
       contactName,
       contactPhone,
       price,
-      status: 'pending' as const,
+      status: 'pending',
       createdAt: new Date().toISOString(),
       isVerified: false,
     };
 
     bookTimeSlot(selectedSlot.id);
     addOrder(newOrder);
+    setLastOrder(newOrder);
     setShowSuccess(true);
   };
 
-  const handleBackToHome = () => {
+  const handleViewOrder = () => {
     resetFormData();
     navigate('/orders');
   };
 
-  if (showSuccess) {
+  if (showSuccess && lastOrder) {
     return (
       <div className="max-w-md mx-auto">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 text-center">
@@ -156,38 +157,42 @@ export default function BookingPage() {
           <div className="bg-slate-50 rounded-xl p-4 mb-6 text-left space-y-3">
             <div className="flex justify-between">
               <span className="text-slate-500 text-sm">订单号</span>
-              <span className="text-slate-800 font-medium text-sm">GYM{Date.now()}</span>
+              <span className="text-slate-800 font-medium text-sm font-mono">{lastOrder.orderNo}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500 text-sm">场地</span>
-              <span className="text-slate-800 font-medium text-sm">{selectedVenue?.name}</span>
+              <span className="text-slate-800 font-medium text-sm">{lastOrder.venueName}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-500 text-sm">时间</span>
               <span className="text-slate-800 font-medium text-sm">
-                {format(new Date(selectedDate), 'MM月dd日')} {selectedSlot?.startTime}-{selectedSlot?.endTime}
+                {format(new Date(lastOrder.date), 'MM月dd日')} {lastOrder.startTime}-{lastOrder.endTime}
               </span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-500 text-sm">费用</span>
-              <span className="text-orange-600 font-bold text-sm">
-                {selectedVenue?.isFree ? '免费' : `¥${selectedVenue?.pricePerHour}`}
+              <span className="text-slate-500 text-sm">人数</span>
+              <span className="text-slate-800 font-medium text-sm">{lastOrder.peopleCount} 人</span>
+            </div>
+            <div className="flex justify-between pt-2 border-t border-slate-200">
+              <span className="text-slate-600 font-medium">费用</span>
+              <span className="text-orange-600 font-bold text-lg">
+                {lastOrder.price > 0 ? `¥${lastOrder.price}` : '免费'}
               </span>
             </div>
           </div>
 
           <div className="flex gap-3">
             <button
-              onClick={handleBackToHome}
+              onClick={() => navigate('/')}
               className="flex-1 px-4 py-3 rounded-xl bg-slate-100 text-slate-700 font-medium hover:bg-slate-200 transition-colors"
             >
-              查看订单
+              返回首页
             </button>
             <button
-              onClick={() => navigate('/')}
+              onClick={handleViewOrder}
               className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-orange-500 to-orange-600 text-white font-medium hover:from-orange-600 hover:to-orange-700 transition-all shadow-lg shadow-orange-500/25"
             >
-              返回首页
+              查看订单
             </button>
           </div>
         </div>
